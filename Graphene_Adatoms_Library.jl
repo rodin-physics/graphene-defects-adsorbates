@@ -8,8 +8,8 @@ t = 2.8;        # Hopping integral
 NumEvals = 1e4; # Maximum number of evaluations in integrals
 
 # Graphene lattice vectors in Angstroms
-d1 = 2.46 .* [1 √(3)] / 2;
-d2 = 2.46 .* [-1 √(3)] / 2;
+d1 = 2.46 .* [1 √(3)] ./ 2;
+d2 = 2.46 .* [-1 √(3)] ./ 2;
 
 # Sublattice spinors
 A = [1, 0]
@@ -24,19 +24,20 @@ end
 
 ## Helper functions
 # Auxiliary W function
-function W(z, x)
+function W(z :: ComplexF64, x :: Float64)
     return ((z / t)^2 - 1) / (4 * cos(x)) - cos(x)
 end
 
 # Auxiliary Y function used in the calculation of Ω
-function Y(n :: Int, z, x)
-    return (W(z, x) - √(W(z, x) - 1) * √(W(z, x) + 1))^n / (√(W(z, x) - 1) * √(W(z, x) + 1))
+function Y(n :: Int, z :: ComplexF64, x :: Float64)
+    W_ = W(z, x)
+    return (W_ - √(W_ - 1) * √(W_ + 1))^n / (√(W_ - 1) * √(W_ + 1))
 end
 
 ## Main Functions
-function Ω(z, u :: Int, v :: Int) :: ComplexF64
-    f(x) = exp(1im * (u - v) * x) / cos(x) * Y(abs.(u + v), z, x)
-    res = quadgk(f, 0, 2 * π, rtol = ν, maxevals = NumEvals)
+function Ω(z :: ComplexF64, u :: Int, v :: Int) :: ComplexF64
+    f_int(x) = exp(1im * (u - v) * x) / cos(x) * Y(abs.(u + v), z, x)
+    res = quadgk(f_int, 0, 2 * π, rtol = ν, maxevals = NumEvals)
     return (res[1] / (8 * π * t^2))
 end
 
@@ -75,7 +76,8 @@ end
 
 # Local density function
 function Δρ(Loc :: GrapheneCoord, V, ϵ, μ, Imps :: Array{GrapheneCoord, 1}) :: ComplexF64
-    res =  quadgk(x -> Δρ_Integrand(Loc, V, ϵ, μ + 1im * x, Imps ), -Inf, 0, Inf, maxevals  = NumEvals, rtol = ν)
+    f_int(x) = Δρ_Integrand(Loc, V, ϵ, μ + 1im * x, Imps )
+    res =  quadgk(f_int, -Inf, 0, Inf, maxevals  = NumEvals, rtol = ν)
     return (V^2 * res[1] / (2 * π))
 end
 
@@ -93,11 +95,10 @@ end
 
 # Impurity interaction energy
 function F_I(V, ϵ, μ, Imps :: Array{GrapheneCoord, 1})
-    f(x) = F_I_Integrand(V, ϵ, μ + 1im * x, Imps)
-    res = quadgk(f, -Inf, 0, Inf, maxevals = NumEvals, rtol = ν)
-    return  (res[1])
+    f_int(x) = F_I_Integrand(V, ϵ, μ + 1im * x, Imps)
+    res = quadgk(f_int, -Inf, 0, Inf, maxevals = NumEvals, rtol = ν)
+    return (res[1])
 end
-
 
 ## Data Processing Functions
 
@@ -117,8 +118,8 @@ function Data_Process(A_Lattice, B_Lattice)
     D2S = repeat(d2s', 2 * nPts + 1, 1);
 
     # Coordinates of the carbon atoms
-    XS = d1[1] * D1S + d2[1] * D2S;
-    YS = d1[2] * D1S + d2[2] * D2S;
+    XS = d1[1] .* D1S .+ d2[1] .* D2S;
+    YS = d1[2] .* D1S .+ d2[2] .* D2S;
 
     # Flatten the coordinates and the data
     XS_A = reshape(XS, 1, sz[1]^2);
@@ -151,5 +152,4 @@ function Data_Process(A_Lattice, B_Lattice)
     YS = [YS yMax yMin];
     dta = [dta maxV minV];
     return([XS; YS; dta])
-
 end
