@@ -2,9 +2,9 @@ using QuadGK
 using LinearAlgebra
 
 ## Parameters
-const ν = 1e-3;       # Small number for relative tolerance
-const η = 1e-7;       # Small number for imaginary part
-const NumEvals = 1e4; # Maximum number of evaluations in integrals
+const ν = 1e-2;       # Small number for relative tolerance
+const η = 1e-8;       # Small number for absolute tolerance
+const NumEvals = 1e6; # Maximum number of evaluations in integrals
 
 # Graphene hopping integral and lattice vectors in Angstroms
 const t = 2.8;
@@ -15,17 +15,24 @@ const d2 = 2.46 .* [-1 √(3)] ./ 2;
 const A = [1, 0]
 const B = [0, 1]
 
-# Graphene Coordinate type
+# Graphene Coordinate type: R = u * d1 + v * d2
 struct GrapheneCoord
     u :: Int
     v :: Int
     sublattice :: Array{Int64, 1}
 end
 
+# Localized Impurity type
+struct Impurity
+    pos :: GrapheneCoord
+    V :: Float64    # Coupling energy
+    ϵ :: Float64    # On-site energy
+end
+
 ## Helper functions
 # Auxiliary W function
 function W(z :: ComplexF64, x :: Float64)
-    return ((z / t)^2 - 1.0) / (4.0 * cos(x)) - cos(x)
+    return (((z / t)^2 - 1.0) / (4.0 * cos(x)) - cos(x))
 end
 
 # Auxiliary Y function used in the calculation of Ω
@@ -34,10 +41,21 @@ function Y(n :: Int, z, x)
     return (W_ - √(W_ - 1) * √(W_ + 1))^n / (√(W_ - 1) * √(W_ + 1))
 end
 
+# When computing Ω, occasionally the integrand becomes small enough to give NaN
+# This helper functions is used to catch these instances
+function Ω_Integrand(z, u, v, x :: Float64)
+    res = exp(1.0im * (u - v) * x) / cos(x) * Y(abs.(u + v), z, x)
+    if isnan(res) == true
+        return 0.0 + 0.0im
+    else
+        return res
+    end
+end
+
 ## Main Functions
 function Ω(z, u, v)
-    f_int(x) = exp(1.0im * (u - v) * x) / cos(x) * Y(abs.(u + v), z, x)
-    res = quadgk(f_int, 0, 2 * π, rtol = ν, maxevals = NumEvals)
+    f_int(x) = Ω_Integrand(z, u, v, x)
+    res = quadgk(f_int, 0, 2 * π, maxevals = NumEvals)
     return (res[1] / (8.0 * π * t^2) )
 end
 
@@ -57,28 +75,48 @@ function Propagator(Imp_l :: GrapheneCoord, Imp_m :: GrapheneCoord, z)
     end
 end
 
-# Scattering matrix Λ
-function Λ(V, ϵ, z, ImpsT :: Array{GrapheneCoord, 1})
-    nImps = length(ImpsT)
-    ImpsT_Mat = repeat(ImpsT, 1, nImps)
-    Imps_Mat = permutedims(ImpsT_Mat)
-    Γ_Inv = (z - ϵ) .* Matrix{Int}(I, nImps, nImps)
-    Prop = V^2 .* (map((x, y) -> Propagator(x, y, z), ImpsT_Mat, Imps_Mat))
+# Inverse full impurity Green's function
+function Λ_Inv(z, Imps :: Array{Impurity, 1})
+
+    nImps = length(Imps)
+    ϵ = map(x -> x.ϵ, Imps)         # Array of impurity on-site energies
+    V = map(x -> x.V, Imps)         # Array of impurity coupling energies
+    loc = map(x -> x.pos, Imps)     # Array of impurity positions
+
+    ϵ_Mat = Diagonal(ϵ)             #  Diagonal matrix of on-site energies
+    V_Mat = Diagonal(V)             # Diagonal matrix of coupling energies
+
+
+    # Impurity Green's function for isolated impurities (as a diagonal matrix)
+    Γ_Inv = z .* Matrix{Int}(I, nImps, nImps) .- ϵ_Mat
+
+    locT_Mat = repeat(loc, 1, nImps)    # Impurity position matrix
+    loc_Mat = permutedims(locT_Mat)     # Transpose of impurity position matrix
+
+
+    Prop = V_Mat * (map((x, y) -> Propagator(x, y, z), locT_Mat, loc_Mat)) * V_Mat
     return (Γ_Inv .- Prop)
 end
 
 # Integrand used to calculate the local density
-function Δρ_Integrand(Loc, V, ϵ, z, Imps)
-    Λ_Inv = inv(Λ(V, ϵ, z, Imps))
-    PropVector = reshape(map(x -> Propagator(Loc, x , z), Imps), (1, length(Imps)))
-    return ((PropVector * Λ_Inv * permutedims(PropVector))[1])
+function Δρ_Integrand(Loc, z, Imps)
+    Λ = inv(Λ_Inv(z, Imps))
+    imp_loc = map(x -> x.pos, Imps)
+
+    V = map(x -> x.V, Imps)
+    V_Mat = Diagonal(V)
+
+    PropVectorL = reshape(map(x -> Propagator(Loc, x , z), imp_loc), (1, length(Imps)))
+    PropVectorR = reshape(map(x -> Propagator(x, Loc , z), imp_loc), (length(Imps), 1))
+
+    return ((PropVectorL * V_Mat * Λ * V_Mat * PropVectorR)[1])
 end
 
 # Local density function
-function Δρ(Loc, V, ϵ, μ, Imps)
-    f_int(x) = Δρ_Integrand(Loc, V, ϵ, μ + 1im * x, Imps )
-    res =  quadgk(f_int, -Inf, 0, Inf, maxevals  = NumEvals, rtol = ν)
-    return (V^2 * res[1] / (2 * π))
+function Δρ(Loc, μ, Imps)
+    f_int(x) = Δρ_Integrand(Loc, μ + 1im * x, Imps )
+    res = quadgk(f_int, -Inf, 0, Inf, maxevals  = NumEvals, rtol = ν, atol = η)
+    return (res[1] / (2 * π))
 end
 
 # Impurity self-energy function
@@ -86,17 +124,35 @@ function Σ(z)
     return (z * Ω(z, 0, 0))
 end
 
-# Integrand used to compute the interaction energy
-function F_I_Integrand(V, ϵ, z, Imps)
-    Λ_ = Λ(V, ϵ, z, Imps)
-    denom = z - ϵ - V^2 * Σ(z)
-    return (-log(det(Λ_ ./ denom)) / (2 * π))
+# Integrand used to compute the interaction energy. We catch NaN and return 0
+function F_I_Integrand(z, Imps)
+    nImps = length(Imps)
+    Λ_Inv_ = Λ_Inv(z, Imps)
+
+    ϵ = map(x -> x.ϵ, Imps)
+    V = map(x -> x.V, Imps)
+    loc = map(x -> x.pos, Imps)
+
+    Σ_ = Σ(z)
+
+    ϵ_Mat = Diagonal(ϵ)
+    V_Mat = Diagonal(V)
+
+    Λ0_Inv = z .* Matrix{Int}(I, nImps, nImps) .- ϵ_Mat .- V_Mat .* Σ_ .* V_Mat
+
+    res = -log(det(Λ_Inv_ * inv(Λ0_Inv))) / (2 * π)
+
+    if isnan(res) == true
+        return 0.0 + 0.0im
+    else
+        return res
+    end
 end
 
 # Impurity interaction energy
-function F_I(V, ϵ, μ, Imps)
-    f_int(x) = F_I_Integrand(V, ϵ, μ + 1im * x, Imps)
-    res = quadgk(f_int, -Inf, 0, Inf, maxevals = NumEvals, rtol = ν)
+function F_I(μ, Imps)
+    f_int(x) = F_I_Integrand(μ + 1im * x, Imps)
+    res = quadgk(f_int, -Inf, 0, Inf, maxevals = NumEvals, rtol = ν, atol = η)
     return (res[1])
 end
 
@@ -135,21 +191,5 @@ function Data_Process(A_Lattice, B_Lattice)
     YS = [YS_A YS_B];
     dta = [A_Lattice B_Lattice];
 
-    # Add values to make sure that the color scheme is centered around zero
-    maxVal = maximum(dta);
-    minVal = minimum(dta);
-    maxAbs = max(abs.(maxVal), abs.(minVal))
-
-    # Put the additional points away from the main data
-    xMax = 1000;
-    xMin = -1000;
-    yMax = 1000;
-    yMin = -1000;
-    minV = - maxAbs;
-    maxV = maxAbs;
-
-    XS = [XS xMax xMin];
-    YS = [YS yMax yMin];
-    dta = [dta maxV minV];
     return([XS; YS; dta])
 end

@@ -4,32 +4,36 @@ using DelimitedFiles
 
 include("Graphene_Adatoms_Library.jl")
 
-A_Lattice = readdlm("Data/Interaction/Interaction_A.txt")
-B_Lattice = readdlm("Data/Interaction/Interaction_B.txt")
+data = readdlm("Data/Interaction/Processed/F_mu_04_H.dat")
 
-data = Data_Process(A_Lattice, B_Lattice)
+XS = data[:, 1]
+YS = data[:, 2]
+FI = data[:, 3]
 
-XS = data[1,:]
-YS = data[2,:]
-FI = data[3,:]
+bound = 1e-5;
+bound = bound * 1e3;
+
+FI = FI * 1e3
 
 pyplot();
-plot(   leg = false,
+scatter(XS,YS,
+        marker_z = FI,
+        markerstrokecolor = :white,
+        markerstrokewidth = 0.001,
+        markersize = 3,
+        leg = false,
         aspect_ratio=1,
-        # markeralpha = 0.25,
-        # xaxis = (L"\frac{U}{m-\epsilon}", font(20)),
-        # yaxis = (L"\frac{\mu}{m}", font(20)),
-        xtickfont = font(12),
-        ytickfont = font(12),
-        # yticks = 0.25:0.25:1,
+        # xaxis = (L"\AA", font(20, "Serif")),
+        # yaxis = (L"\AA", font(20, "Serif")),
+        xtickfont = font(12, "Serif"),
+        ytickfont = font(12, "Serif"),
         ylims = (-60,60),
         xlims = (-60,60),
-        size = (400,400)
+        size = (500,400),
+        color = :coolwarm,
+        clim = (-bound, bound),
+        colorbar = true
         )
-
-scatter!(XS',YS', zcolor = FI',
-        markerstrokecolor = :white,
-        markersize = 3,
-        color = :RdBu)
-
-savefig("Interaction_Analytic.pdf")
+println("Plot Done")
+savefig("F_mu_04_H.pdf")
+println("Plot Saved")
